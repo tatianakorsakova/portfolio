@@ -1,0 +1,122 @@
+-- =============================================================================
+-- Рейтинг топ-3 товаров по выручке по месяцам с использованием оконных функций
+-- =============================================================================
+
+/*
+=============================================================================
+Зачем делать рейтинг:
+=============================================================================
+- Определение лидеров продаж для оптимизации складских запасов
+- Выявление сезонных трендов (какие товары популярны в разные месяцы)
+- База для принятия решений по закупкам и промо-акциям
+
+=============================================================================
+Почему это гибкий запрос и что ещё можно получить, немного его изменив:
+=============================================================================
+- Для получения антирейтинга и выявления аутсайдеров изменяем сортировку внутри оконной функции
+- Для получения рейтинга по другому количеству (топ-5, топ-10) меняем условие фильтрации в WHERE
+- Можно составить рейтинг по любым другим показателям и временным периодам
+*/
+
+
+
+select
+	month,
+	product,
+	revenue
+from
+	(
+	select
+		to_char(month, 'MM YYYY') as month,
+		product,
+		sales_count * price as revenue,
+		dense_rank() over(partition by month order by sales_count * price desc) as revenue_rank
+	from
+		(
+		select
+			DATE_TRUNC('month', o.order_date) as month,
+			p.product_name as product,
+			p.price,
+			COUNT(o.product_id) as sales_count
+		from
+			orders o
+		join product p on
+			o.product_id = p.id
+		where
+			o.order_date >= '2025-08-01'
+			and o.order_date < '2025-11-01'
+		group by
+			month,
+			p.product_name,
+			p.price
+) product_sales_by_month
+	order by
+		month,
+		revenue_rank) rank_by_revenue
+where
+	revenue_rank in (1, 2, 3)
+order by
+	month,
+	revenue_rank;
+
+
+/*
+и наконец, используя расчет доли выручки и накопленной доли выручки, можем провести ABC анализ
+по данному показателю.
+ABC-анализ помогает сегментировать ресурсы (товары, клиенты, поставщики и т.д.) по их важности и влиянию на показатели бизнеса, основываясь на принципе Парето (80/20)
+*/
+
+
+select
+	month,
+	product,
+	revenue,
+	revenue_share,
+	cumulative_share,
+	case
+		when cumulative_share <= 0.8 then 'A'
+		when cumulative_share <= 0.95 then 'B'
+		else 'C'
+	end as abc_category
+from
+	(
+	select
+		month,
+		product,
+		revenue,
+		revenue_share,
+		round(SUM(revenue_share) over(
+            partition by month 
+            order by revenue desc
+            rows between unbounded preceding and current row
+        ), 3) as cumulative_share
+	from
+		(
+		select
+			to_char(month, 'MM YYYY') as month,
+			product,
+			revenue,
+			round(revenue / SUM(revenue) over(partition by month), 3) as revenue_share
+		from
+			(
+			select
+				DATE_TRUNC('month', o.order_date) as month,
+				p.product_name as product,
+				COUNT(o.product_id) * p.price as revenue
+			from
+				orders o
+			join product p on
+				o.product_id = p.id
+			where
+				o.order_date >= '2025-08-01'
+				and o.order_date < '2025-11-01'
+			group by
+				month,
+				p.product_name,
+				p.price
+        ) product_sales_by_month
+    ) revenue_with_share
+) revenue_with_cumulative
+order by
+	month,
+	revenue desc;
