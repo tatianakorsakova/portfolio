@@ -1,0 +1,195 @@
+-- =============================================================================
+-- Рейтинг топ-3 товаров и ABC анализ по месяцам с использованием оконных функций
+-- =============================================================================
+
+/*
+Первый запрос - топ-3 товаров по месяцам.
+=============================================================================
+Зачем узнавать, какие три товара приносят больше выручки за каждый месяц:
+=============================================================================
+- для оптимизации складских запасов и закупок
+- выявляем сезонные тренды 
+=============================================================================
+Почему это гибкий запрос и что ещё можно получить, немного его изменив:
+=============================================================================
+- Для получения антирейтинга и выявления аутсайдеров -- изменяем сортировку внутри оконной функции
+- Для получения рейтинга по другому количеству (топ-5, топ-10) -- меняем условие фильтрации в WHERE
+- Можно составить рейтинг по любым другим показателям и временным периодам
+*/
+
+
+
+select
+	date(month) as month,
+	case
+		when extract(month from month) = 08 then 'Август'
+		when extract(month from month) = 09 then 'Сентябрь'
+		when extract(month from month) = 10 then 'Октябрь'
+	end as month_name,
+	-- добавим русскоязычное назименование месяца для удобства восприятия
+	product,
+	revenue
+from
+    --используем вложенные подзапросы
+	(
+	select
+		month,
+		product,
+		sales_count * price as revenue,
+		-- вычисляем выручку
+		dense_rank() over(partition by month order by sales_count * price desc) as revenue_rank
+		-- с помощью оконной функции ранжируем товары по выручке
+	from
+		(
+		select
+			DATE_TRUNC('month', o.order_date) as month,
+			p.product_name as product,
+			p.price,
+			COUNT(o.product_id) as sales_count
+			-- считаем продажи по месяцам с помощью агрегатной функции
+		from
+			orders o
+		join product p on
+			o.product_id = p.id
+		where
+			o.order_date >= '2025-08-01'
+			and o.order_date < '2025-11-01'
+		group by
+			month,
+			p.product_name,
+			p.price
+) product_sales_by_month
+	) rank_by_revenue
+where
+	revenue_rank in (1, 2, 3)
+	-- выбираем топ-3
+order by
+	month,
+	revenue_rank;
+
+	-- результирующая таблица в top-3 products Output table.png
+
+
+/*
+Перепишем запрос с использованием CTE для удобства чтения
+*/
+
+with product_sales_by_month as (
+select
+			DATE_TRUNC('month', o.order_date) as month,
+			p.product_name as product,
+			p.price,
+			COUNT(o.product_id) as sales_count
+	        -- считаем продажи по месяцам с помощью агрегатной функции
+from
+			orders o
+join product p on
+			o.product_id = p.id
+where
+			o.order_date >= '2025-08-01'
+	and o.order_date < '2025-11-01'
+group by
+			month,
+			p.product_name,
+			p.price
+),
+rank_by_revenue as (
+select
+		month,
+		product,
+		sales_count * price as revenue,
+	    -- вычисляем выручку
+		dense_rank() over(partition by month order by sales_count * price desc) as revenue_rank
+	    -- с помощью оконной функции ранжируем товары по выручке
+from
+	product_sales_by_month
+)
+select
+	date(month) as month,
+	case
+		when extract(month from month) = 08 then 'Август'
+		when extract(month from month) = 09 then 'Сентябрь'
+		when extract(month from month) = 10 then 'Октябрь'
+	end as month_name,
+	-- добавим русскоязычное назименование месяца для удобства восприятия
+	product,
+	revenue
+from
+	rank_by_revenue
+where
+	revenue_rank in (1, 2, 3)
+	-- выбираем топ-3
+order by
+	month,
+	revenue_rank;
+
+/*
+и наконец, используя расчет доли выручки и накопленной доли выручки с помощью оконных функций, можем провести ABC анализ
+по выручке.
+ABC-анализ помогает сегментировать ресурсы (товары, клиенты, поставщики и т.д.) по их важности и влиянию на показатели бизнеса, 
+основываясь на принципе Парето (80/20)
+*/
+
+select
+	date(month) as month,
+	case
+		when extract(month from month) = 08 then 'Август'
+		when extract(month from month) = 09 then 'Сентябрь'
+		when extract(month from month) = 10 then 'Октябрь'
+	end as month_name,
+	-- добавим русскоязычное назименование месяца для удобства восприятия
+	product, --товар
+	revenue, -- выручка
+	revenue_share, --доля выручки в общей выручке за месяц
+	cumulative_share, -- накопительная доля выручки в общей выручке за месяц
+	case
+		when cumulative_share <= 0.8 then 'A'
+		when cumulative_share <= 0.95 then 'B'
+		else 'C'
+	end as abc_category 
+	-- присваиваем категорию исходя из того, что товары категории А приносят 80% выручки, B - последующие 15% и С - оставшиеся 5%
+from
+	(
+	select
+		month,
+		product,
+		revenue,
+		revenue_share,
+		round(SUM(revenue_share) over(
+            partition by month 
+            order by revenue desc
+            rows between unbounded preceding and current row
+        ), 3) as cumulative_share 
+        -- вычисляем накопительную долю выручки в общей выручке за месяц, округляем до 3х знаков после запятой
+	from
+		(
+		select
+			month,
+			product,
+			revenue,
+			round(revenue / SUM(revenue) over(partition by month), 3) as revenue_share
+			-- вычисляем долю выручки в общей выручке за месяц, округляем до 3х знаков после запятой
+		from
+			(
+			select
+				DATE_TRUNC('month', o.order_date) as month,
+				p.product_name as product,
+				COUNT(o.product_id) * p.price as revenue
+				-- вычисляем выручку с помощью агрегатной функции, группируем по месяцам и товарам
+			from
+				orders o
+			join product p on
+				o.product_id = p.id
+			where
+				o.order_date >= '2025-08-01'
+				and o.order_date < '2025-11-01'
+			group by
+				month,
+				p.product_name,
+				p.price
+        ) product_sales_by_month
+    ) revenue_with_share
+) revenue_with_cumulative
+order by
+	month,
+	revenue desc;
