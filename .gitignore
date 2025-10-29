@@ -1,0 +1,33 @@
+# Файлы ОС
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Редакторы кода
+.vscode/
+.idea/
+*.swp
+*.swo
+
+
+# Установленные пакеты и дистрибутивы
+*.egg
+*.egg-info/
+dist/
+build/
+
+# Временные файлы
+*.tmp
+*.temp
+*.log
+
+# Данные (если они большие/конфиденциальные)
+/data/
+/raw_data/
+*.csv
+*.xlsx
+
+# Конфиденциальное
+*.env
+secrets.json
+config.py
