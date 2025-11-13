@@ -31,3 +31,6 @@ build/
 *.env
 secrets.json
 config.py
+
+# Тестовые файлы
+test
